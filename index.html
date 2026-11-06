@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <meta name="description" content="Dutch dictation practice for ReadDutch, PollyStop and Speecher stories. Runs in your browser; statistics and progress stay on your device.">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-E5FYNNdlQ0S62la9mcZ7GQADjgvXuMio6rNdZS/m66M='; style-src 'sha256-o1M7Idol2RVH/wWbutROoh2OBWMk5L4aolnas2Ijqeo='; connect-src 'self' https:; media-src 'self' https: blob:; img-src data:; base-uri 'none'; form-action 'none'">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23ff8a3d'/%3E%3Ctext x='16' y='23' font-size='20' text-anchor='middle' font-family='Georgia,serif' font-weight='700' fill='%231b0f05'%3ED%3C/text%3E%3C/svg%3E">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-98wvNBAu2ZKqGbYGVdZxu4PTI/IqOpiC/g+f4ND06Xs='; style-src 'sha256-o1M7Idol2RVH/wWbutROoh2OBWMk5L4aolnas2Ijqeo='; connect-src 'self' https:; media-src 'self' https: blob:; img-src data:; base-uri 'none'; form-action 'none'">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23ff8a3d'/%3E%3Ctext x='16' y='23' font-size='15' text-anchor='middle' font-family='Georgia,serif' font-weight='700' fill='%231b0f05'%3ELT%3C/text%3E%3C/svg%3E">
 <title>LangType</title>
 <style>
 :root {
@@ -347,7 +347,7 @@ const RATES = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1];
 const NORMAL_RATE = 1;
 const opts = Object.assign({}, DEFAULTS);
 try {
-  const saved = JSON.parse(localStorage.getItem('LangType.opts') || '{}');
+  const saved = JSON.parse(localStorage.getItem('dictee.opts') || '{}');
   if (saved && typeof saved === 'object') {
     const v = Number.isFinite(saved.v) ? saved.v : 1;
     if (typeof saved.loose === 'boolean' && v < 4) { opts.caps = saved.loose; opts.accents = saved.loose; }
@@ -359,7 +359,7 @@ try {
     if (v >= 5 && Number.isFinite(saved.pause) && saved.pause >= 0.5 && saved.pause <= 60) opts.pause = saved.pause;
   }
 } catch (e) {}
-const saveOpts = () => { try { localStorage.setItem('LangType.opts', JSON.stringify(Object.assign({ v: OPTS_VERSION }, opts))); } catch (e) {} };
+const saveOpts = () => { try { localStorage.setItem('dictee.opts', JSON.stringify(Object.assign({ v: OPTS_VERSION }, opts))); } catch (e) {} };
 const applyTheme = () => { document.documentElement.dataset.theme = opts.dark ? 'dark' : 'light'; };
 applyTheme();
 const reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -882,7 +882,7 @@ async function alignAudio(session) {
 
 /* ---------- statistics and progress (kept in this browser, in localStorage) ---------- */
 
-const STATS_KEY = 'LangType.stats', LIB_KEY = 'LangType.library', STORY_PREFIX = 'LangType.story.', POS_PREFIX = 'LangType.pos.';
+const STATS_KEY = 'dictee.stats', LIB_KEY = 'dictee.library', STORY_PREFIX = 'dictee.story.', POS_PREFIX = 'dictee.pos.';
 const MAX_WORD_LEN = 60, MAX_DISTINCT_WORDS = 20000, MAX_RUNS_KEPT = 500, RECENT_RUNS = 5, LIB_MAX = 20;
 const LEVEL_RE = /^[A-Za-z0-9+\- ]{1,10}$/;
 const CTRL_RE = /[\u0000-\u001f\u007f]/;
@@ -899,7 +899,7 @@ function localIso(d) {
     (off >= 0 ? '+' : '-') + p(Math.floor(a / 60)) + ':' + p(a % 60);
 }
 
-// Accepts the format of LangType_data.json from the desktop version too. Returns a clean copy, or null.
+// Accepts the format of dictee_data.json from the desktop version too. Returns a clean copy, or null.
 function normalizeStats(d) {
   if (!d || typeof d !== 'object' || !d.words || typeof d.words !== 'object' || !d.stories || typeof d.stories !== 'object') return null;
   const out = emptyStats();
@@ -1011,7 +1011,7 @@ function statsSnapshot() {
 function reportText() {
   const d = readStats(), f1 = (v) => v.toFixed(1);
   const out = [
-    'LangType STATISTICS', 'Updated ' + localIso().slice(0, 16).replace('T', ' '), '',
+    'LANGTYPE STATISTICS', 'Updated ' + localIso().slice(0, 16).replace('T', ' '), '',
     'WPM counts a word as 5 letters and only the time you spend typing: pauses longer than the',
     'pause limit (set in the page, 3 seconds by default) and audio replays are left out.',
     'Accuracy is the share of letters that were right the first time.', '', '',
@@ -1152,7 +1152,7 @@ function download(name, text, type) {
 }
 const dayStamp = () => localIso().slice(0, 10);
 
-toolEls.dl.addEventListener('click', () => download('LangType_stats_' + dayStamp() + '.txt', reportText(), 'text/plain;charset=utf-8'));
+toolEls.dl.addEventListener('click', () => download('langtype_stats_' + dayStamp() + '.txt', reportText(), 'text/plain;charset=utf-8'));
 toolEls.exp.addEventListener('click', () => {
   const d = readStats(), lib = readLib();
   const out = { version: 1, words: d.words, stories: d.stories, progress: Object.create(null), cache: Object.create(null) };
@@ -1160,7 +1160,7 @@ toolEls.exp.addEventListener('click', () => {
     out.progress[slug] = lib[slug];
     try { const c = JSON.parse(localStorage.getItem(STORY_PREFIX + slug)); if (c) out.cache[slug] = c; } catch (e) {}
   }
-  download('LangType_data_' + dayStamp() + '.json', JSON.stringify(out, null, 1), 'application/json');
+  download('langtype_data_' + dayStamp() + '.json', JSON.stringify(out, null, 1), 'application/json');
   toolMsg('Exported. Import this file in another browser to carry your statistics and progress over.');
 });
 toolEls.imp.addEventListener('change', async () => {
@@ -1789,7 +1789,7 @@ function loadFromHtml(html, baseUrl) {
 // Browsers do not let a page read readdutch.nl directly. So after a direct try the request goes through a
 // relay that adds the missing permission header: your own (set in config.js), then free public ones. A saved
 // copy of the story page, opened with the link under the box, always works.
-const CFG = window.LangType_CONFIG || {};
+const CFG = window.DICTEE_CONFIG || {};
 const RELAYS = [];
 if (typeof CFG.relay === 'string' && /^https:\/\//.test(CFG.relay)) RELAYS.push((u) => CFG.relay + encodeURIComponent(u));
 RELAYS.push(
@@ -1867,7 +1867,7 @@ const LESSON_PATH = /^lessons\/(?!\.{1,2}\/)[^\/]+\/[^\/]+\.(?:html?|mp3)$/i;
 const lessonUrl = (rel) => new URL(rel.split('/').map(encodeURIComponent).join('/'), location.href).href;
 const lessonsEl = { box: $('#lessonsBox'), chips: $('#lessonChips'), list: $('#lessonList'), note: $('#lessonNote') };
 let lessons = [], lessonLevel = '';
-try { lessonLevel = localStorage.getItem('LangType.level') || ''; } catch (e) {}
+try { lessonLevel = localStorage.getItem('dictee.level') || ''; } catch (e) {}
 
 // The list may come from lessons/index.json or from GitHub; only paths inside lessons/<level>/ are accepted.
 function normalizeIndex(d) {
@@ -1931,13 +1931,13 @@ function renderLessons() {
     b.setAttribute('aria-pressed', String(lv === lessonLevel));
     b.addEventListener('click', () => {
       lessonLevel = lv;
-      try { localStorage.setItem('LangType.level', lv); } catch (e) {}
+      try { localStorage.setItem('dictee.level', lv); } catch (e) {}
       renderLessons();
     });
     lessonsEl.chips.appendChild(b);
   });
   const missing = lessons.filter((l) => !l.mp3).length;
-  lessonsEl.note.textContent = missing ? missing + (missing === 1 ? ' lesson has' : ' lessons have') + ' no mp3 next to it and will stream its audio from the original site.' : '';
+  lessonsEl.note.textContent = missing ? missing + (missing === 1 ? ' story has' : ' stories have') + ' no mp3 next to it and will stream its audio from the original site.' : '';
   const lib = readLib(), vals = Object.values(lib);
   const shown = lessons.filter((l) => !lessonLevel || l.level === lessonLevel)
     .sort((a, b) => levelCmp(a.level, b.level) || a.name.localeCompare(b.name, undefined, { numeric: true }));
@@ -2124,7 +2124,7 @@ const preset = new URLSearchParams(location.search).get('url');
 if (preset) { els.url.value = preset; loadFromUrl(preset); }
 
 // Small hook so the page can be driven by tests without the network.
-window.__LangType = { indexFromGitHub, parseStory, loadFromHtml, statsSnapshot, readStats, normalizeUrl, segments: () => (S ? S.units.map((u) => u.seg || null) : []), audio: () => (S ? S.audio : null) };
+window.__dictee = { indexFromGitHub, parseStory, loadFromHtml, statsSnapshot, readStats, normalizeUrl, segments: () => (S ? S.units.map((u) => u.seg || null) : []), audio: () => (S ? S.audio : null) };
 })();
 </script>
 </body>
