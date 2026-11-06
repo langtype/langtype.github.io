@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<meta name="description" content="Dutch dictation practice for ReadDutch stories. Runs in your browser; statistics and progress stay on your device.">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-qVUcXUy3rvdUW/KoZmIu1kfurLDdUqZ/xpog2A80a9g='; style-src 'sha256-o1M7Idol2RVH/wWbutROoh2OBWMk5L4aolnas2Ijqeo='; connect-src 'self' https:; media-src 'self' https: blob:; img-src data:; base-uri 'none'; form-action 'none'">
+<meta name="description" content="Dutch dictation practice for ReadDutch, PollyStop and Speecher stories. Runs in your browser; statistics and progress stay on your device.">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-rhwYfcuWroxS1hWq1qcb0x23f+diyvkSOaGfXHsDi1g='; style-src 'sha256-o1M7Idol2RVH/wWbutROoh2OBWMk5L4aolnas2Ijqeo='; connect-src 'self' https:; media-src 'self' https: blob:; img-src data:; base-uri 'none'; form-action 'none'">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23ff8a3d'/%3E%3Ctext x='16' y='23' font-size='20' text-anchor='middle' font-family='Georgia,serif' font-weight='700' fill='%231b0f05'%3ED%3C/text%3E%3C/svg%3E">
 <title>Dictee</title>
 <style>
@@ -229,9 +229,9 @@ label.btn { display: inline-block; }
 <div class="wrap">
   <header>
     <h1>Dictee</h1>
-    <p class="lede">Paste a ReadDutch story link, listen to each sentence, and type what you hear.</p>
+    <p class="lede">Paste a story link (ReadDutch, PollyStop or Speecher), listen to each sentence, and type what you hear.</p>
     <form id="loadForm" class="load">
-      <input id="url" type="text" inputmode="url" placeholder="https://www.readdutch.nl/story/..." aria-label="ReadDutch story link" autocomplete="off" spellcheck="false">
+      <input id="url" type="text" inputmode="url" placeholder="https://www.readdutch.nl/story/...  or pollystop.com/...  or speecher.org/..." aria-label="Story link" autocomplete="off" spellcheck="false">
       <button class="btn primary" type="submit">Load story</button>
     </form>
     <p class="alt">If the link doesn't load, <label class="linkbtn">open a page you saved from your browser<input id="file" type="file" accept=".htm,.html,text/html" hidden></label> instead.</p>
@@ -336,7 +336,7 @@ const els = {
   optCaps: $('#optCaps'), optAccents: $('#optAccents'), optPunct: $('#optPunct'), optAuto: $('#optAuto'), optDark: $('#optDark'),
 };
 
-const NOT_STORY = "That page doesn't contain a ReadDutch story I can read. Check the link, or save the story page from your browser and open it with the link below.";
+const NOT_STORY = "That page doesn't contain a ReadDutch, PollyStop or Speecher story I can read. Check the link, or save the story page from your browser and open it with the link below.";
 const DEFAULTS = { hide: true, caps: false, accents: false, punct: false, auto: true, dark: true, rate: 0.5, pause: 3 };
 // Version 2: "Type punctuation for me" now defaults to off, so a value for it saved before that is ignored.
 // Version 3: the speed menu now sets the slow replay speed (default 0.5x), so a speed saved before that is ignored.
@@ -408,7 +408,7 @@ function extractObject(s, start) {
   return null;
 }
 
-function parseStory(html) {
+function parseReadDutch(html) {
   const flight = extractFlight(html);
   let from = 0;
   for (;;) {
@@ -421,6 +421,101 @@ function parseStory(html) {
       const o = JSON.parse(json);
       if (Array.isArray(o.sentences) && o.sentences.length && o.sentences[0].dutch) return o;
     } catch (e) {}
+  }
+  throw new Error(NOT_STORY);
+}
+
+/* ---------- other sites: PollyStop and Speecher ---------- */
+// Both are turned into the same shape as a ReadDutch story: sentences {dutch, english, part} and audio
+// {url | parts: [urls], est: true}. They carry no per-sentence times, so est tells startStory to work them out
+// from the audio itself (see alignAudio). A part is one audio file; a sentence says which file it is in.
+
+const ABBR_RE = /(?:^|\s)(?:mevr|dhr|mw|mr|dr|drs|prof|ir|bijv|nr|enz|etc|ca|vs|blz|bv)\.$/i;
+const SENT_RE = /[.!?\u2026]+['"\u2019\u201d\u00bb)]*\s+(?=['"\u201c\u2018\u00ab(]?[A-Z\u00c0-\u00d6\u00d8-\u00de])/g;
+const clean = (x) => String(x || '').replace(/\s+/g, ' ').trim();
+
+function splitSentences(text) {
+  const t = clean(text), out = [];
+  let last = 0, m;
+  SENT_RE.lastIndex = 0;
+  while ((m = SENT_RE.exec(t))) {
+    if (ABBR_RE.test(t.slice(0, m.index + 1))) continue;
+    out.push(t.slice(last, m.index + m[0].trimEnd().length));
+    last = m.index + m[0].length;
+  }
+  out.push(t.slice(last));
+  return out.map((x) => x.trim()).filter(Boolean);
+}
+
+// PollyStop: every block of the story is a few sentences with one audio file and one English paragraph.
+function parsePollyStop(html) {
+  if (html.indexOf('story-segment-text') < 0) return null;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const link = doc.querySelector('link[rel="canonical"]'), og = doc.querySelector('meta[property="og:url"]');
+  const canon = (link && link.getAttribute('href')) || (og && og.getAttribute('content')) || '';
+  const base = /^https:\/\/(?:[\w-]+\.)*pollystop\.com\//i.test(canon) ? canon : 'https://pollystop.com/';
+  const h1 = doc.querySelector('h1.sp-title') || doc.querySelector('h1');
+  const head = clean(doc.title);
+  const title = clean(h1 && h1.textContent) || clean(head.split(/\s*[:|]\s*/)[0]);
+  const level = (head.match(/\b([ABC][12])\b/) || [])[1] || '';
+  const sentences = [], parts = [];
+  doc.querySelectorAll('[data-story-block]').forEach((blk) => {
+    const p = blk.querySelector('.story-segment-text');
+    const text = clean(p && p.textContent);
+    if (!text) return;
+    const btn = blk.querySelector('[data-polly-segment-audio]');
+    let url = '';
+    try { url = btn ? new URL(btn.getAttribute('data-polly-segment-audio'), base).href : ''; } catch (e) {}
+    const part = url ? parts.push(url) - 1 : undefined;
+    const tr = blk.querySelector('[data-story-translation]');
+    const en = clean(tr && tr.textContent), es = splitSentences(en), ds = splitSentences(text);
+    // One English paragraph per block: sentence by sentence when the counts agree, else all under the first one.
+    ds.forEach((d, k) => sentences.push({ dutch: d, english: es.length === ds.length ? es[k] : (k === 0 ? en : ''), part }));
+  });
+  if (!sentences.length) return null;
+  const id = (canon.match(/\/(\d+)\/?$/) || [])[1];
+  return { slug: 'pollystop-' + (id || title), title, difficulty: level, sentences, audio: parts.length ? { parts, est: true } : undefined };
+}
+
+// Speecher: the page carries the text (window.RD_FIRST) and the length of each audio clip (window.RD_AUDIO).
+// A text is one clip (i=0); a dialogue ("Name: line" turns) is one clip per turn.
+function parseSpeecher(html) {
+  if (html.indexOf('RD_FIRST') < 0) return null;
+  const get = (name) => {
+    const k = html.indexOf('window.' + name + ' = ');
+    const s = k < 0 ? -1 : html.indexOf('{', k);
+    const json = s < 0 ? null : extractObject(html, s);
+    try { return json ? JSON.parse(json) : null; } catch (e) { return null; }
+  };
+  const r = get('RD_FIRST');
+  if (!r || typeof r.body !== 'string' || typeof r.slug !== 'string' || !r.body.trim()) return null;
+  const idx = (get('RD_AUDIO') || {})[r.slug];
+  const lang = (html.match(/RD_CONTENT_LANG\s*=\s*"([a-z-]{2,8})"/) || [])[1] || 'nl';
+  const clip = (i) => 'https://speecher.org/index.php?action=reading_audio&slug=' + encodeURIComponent(r.slug) + '&lang=' + lang + '&i=' + i;
+  const TURN = /^([^\n:\uff1a]{1,40})(?::\s+|\uff1a\s*)(\S.*)$/;
+  const lines = r.body.trim().split(/\r\n|\r|\n/).map((l) => l.trim()).filter(Boolean);
+  const turns = lines.filter((l) => TURN.test(l)).length;
+  const dialogue = turns >= 3 && turns * 3 >= lines.length * 2;
+  const sentences = [], parts = [];
+  let audio;
+  if (dialogue) {
+    lines.forEach((l, i) => {
+      const m = l.match(TURN), dur = Array.isArray(idx) ? Number(idx[i]) : 0;
+      const part = dur > 0 ? parts.push(clip(i)) - 1 : undefined;
+      splitSentences(m ? m[2] : l).forEach((d) => sentences.push({ dutch: d, english: '', part }));
+    });
+    if (parts.length) audio = { parts, est: true };
+  } else {
+    splitSentences(r.body).forEach((d) => sentences.push({ dutch: d, english: '' }));
+    if (Array.isArray(idx) && idx.length === 1 && idx[0] > 0) audio = { url: clip(0), est: true };
+  }
+  if (!sentences.length) return null;
+  return { slug: 'speecher-' + r.slug, title: clean(r.title), difficulty: String(r.level || '').toUpperCase(), sentences, audio };
+}
+
+function parseStory(html) {
+  for (const f of [parseReadDutch, parsePollyStop, parseSpeecher]) {
+    try { const s = f(html); if (s) return s; } catch (e) { /* not that site */ }
   }
   throw new Error(NOT_STORY);
 }
@@ -477,8 +572,13 @@ function playSegment(i, rate) {
   adoptPcm();
   const token = audioToken;
   const a = S.audio;
+  // A story with one audio file per part: load the file this sentence is in.
+  const want = S.parts && Number.isInteger(seg.part) ? S.parts[seg.part] : '';
+  if (want && a.dataset.src !== want) { a.dataset.src = want; a.src = want; }
   const go = () => {
     if (!S || token !== audioToken) return;
+    if (seg.est && !(seg.end > seg.start) && Number.isFinite(a.duration)) fillEst(S, seg.part | 0, a.duration);
+    if (!(seg.end > seg.start)) return;
     a.playbackRate = rate || NORMAL_RATE;
     a.currentTime = seg.start;
     const p = a.play();
@@ -495,6 +595,15 @@ function playSegment(i, rate) {
   };
   if (a.readyState >= 1) go();
   else a.addEventListener('loadedmetadata', go, { once: true });
+}
+
+// Sentences that came without times play from a guess until the audio has been analysed: the sentences of
+// a file share it in proportion to their length.
+function fillEst(s, part, dur) {
+  const us = s.units.filter((u) => u.seg && u.seg.est && (u.seg.part | 0) === part);
+  const tot = us.reduce((n, u) => n + u.text.length + 8, 0);
+  let t = 0;
+  us.forEach((u) => { const d = (u.text.length + 8) / tot * dur; u.seg.start = t; u.seg.end = t + d; t += d; });
 }
 
 function replay(rate) {
@@ -537,7 +646,7 @@ const TAIL_PAD = 0.18;      // seconds kept after its last sound
 
 // db: loudness of each 10 ms of the audio; segs: the given {start, end} of each sentence, in order.
 // Returns the corrected list, or null if the recording has no clear pauses to go by.
-function alignSegments(db, segs, total) {
+function alignSegments(db, segs, total, plan) {
   const n = db.length;
   if (n < 10 || !segs.length) return null;
   const sorted = Float32Array.from(db).sort();
@@ -562,12 +671,15 @@ function alignSegments(db, segs, total) {
     }
     return best;
   };
-  const cuts = [Math.max(0, segs[0].start - 1)];
-  for (let k = 1; k < segs.length; k++) {
-    const b = (segs[k - 1].end + segs[k].start) / 2;
-    cuts.push(Math.min(total, Math.max(cutNear(b), cuts[k - 1] + 0.05)));
+  let cuts = plan ? plan(pauses, thr) : null;   // sentences without times: the caller picks the cuts
+  if (!cuts) {
+    cuts = [Math.max(0, segs[0].start - 1)];
+    for (let k = 1; k < segs.length; k++) {
+      const b = (segs[k - 1].end + segs[k].start) / 2;
+      cuts.push(Math.min(total, Math.max(cutNear(b), cuts[k - 1] + 0.05)));
+    }
+    cuts.push(Math.min(total, segs[segs.length - 1].end + 1));
   }
-  cuts.push(Math.min(total, segs[segs.length - 1].end + 1));
   return segs.map((g, k) => {
     const lo = Math.floor(cuts[k] / AUDIO_FRAME), hi = Math.min(n, Math.ceil(cuts[k + 1] / AUDIO_FRAME));
     let a = lo;
@@ -631,13 +743,89 @@ function adoptPcm() {
   S.audio = S.pcm.audio;
 }
 
+// Sentences without times: between two neighbours the cut goes to a real pause. The pauses are chosen all at once
+// (cheapest way through, in order) so that they are long and each sentence comes out about as long as its text
+// suggests. ps: [middle, length] of each pause in time order; est: where each cut would be by text length alone.
+function pickCuts(ps, est) {
+  const M = est.length, P = ps.length;
+  if (!M) return [];
+  if (P < M) return est;
+  const cost = (j, p) => 0.4 * Math.abs(ps[p][0] - est[j]) - 2 * Math.min(ps[p][1], 0.9);
+  const dp = [], from = [];
+  for (let j = 0; j < M; j++) {
+    const row = new Float64Array(P).fill(Infinity), fr = new Int32Array(P).fill(-1);
+    let best = Infinity, bi = -1;
+    for (let p = 0; p < P; p++) {
+      if (j === 0) row[p] = cost(0, p);
+      else {
+        if (p > 0 && dp[j - 1][p - 1] < best) { best = dp[j - 1][p - 1]; bi = p - 1; }
+        if (bi >= 0) { row[p] = best + cost(j, p); fr[p] = bi; }
+      }
+    }
+    dp.push(row);
+    from.push(fr);
+  }
+  let p = 0;
+  for (let q = 1; q < P; q++) if (dp[M - 1][q] < dp[M - 1][p]) p = q;
+  if (!isFinite(dp[M - 1][p])) return est;
+  const out = new Array(M);
+  for (let j = M - 1; j >= 0; j--) { out[j] = ps[p][0]; p = from[j][p]; }
+  return out;
+}
+
+// groups: one per audio file, in order: { lo, hi: where its stretch of the recording runs, w: text length of each sentence }.
+// Returns the cut before every sentence and after the last one.
+function planEst(db, groups, thr, pauses) {
+  const F = AUDIO_FRAME, cuts = [];
+  for (const g of groups) {
+    let a = Math.max(0, Math.floor(g.lo / F)), z = Math.min(db.length, Math.ceil(g.hi / F)) - 1;
+    while (a < z && db[a] < thr) a++;
+    while (z > a && db[z] < thr) z--;
+    const s = a * F, e = (z + 1) * F, tot = g.w.reduce((x, y) => x + y, 0);
+    let acc = 0;
+    const est = g.w.slice(0, -1).map((w) => s + (e - s) * (acc += w) / tot);
+    const ps = pauses.filter(([x, y]) => x > s && y < e && y - x >= 0.1).map(([x, y]) => [(x + y) / 2, y - x]);
+    cuts.push(g.lo, ...pickCuts(ps, est));
+  }
+  cuts.push(groups[groups.length - 1].hi);
+  return cuts;
+}
+
+// Several audio files become one recording (a short silence between them) so the rest works on one timeline.
+const JOIN_GAP = 0.6;
+function joinBuffers(bufs) {
+  const rate = bufs[0].sampleRate, gap = Math.round(rate * JOIN_GAP);
+  if (bufs.some((b) => b.sampleRate !== rate)) return null;
+  const len = bufs.reduce((n, b) => n + b.length, 0) + gap * (bufs.length - 1);
+  const data = new Float32Array(len), offs = [];
+  let at = 0;
+  for (const b of bufs) {
+    offs.push(at / rate);
+    const n = b.numberOfChannels;
+    for (let c = 0; c < n; c++) { const ch = b.getChannelData(c); for (let i = 0; i < b.length; i++) data[at + i] += ch[i] / n; }
+    at += b.length + gap;
+  }
+  return { offs, buf: { sampleRate: rate, length: len, duration: len / rate, numberOfChannels: 1, getChannelData: () => data } };
+}
+
 // Never rejects. Resolves once the sentences' times have been corrected, or it is clear they will not be.
 async function alignAudio(session) {
   try {
-    if (!allowedAudio(session.audioUrl)) return;
-    const buf = await fetchVia(session.audioUrl, async (r) => { try { return await decodeBytes(await r.arrayBuffer()); } catch (e) { return null; } }, 40000);
-    if (!buf || S !== session) return;
-    makePcmAudio(session, buf);
+    const urls = session.parts || [session.audioUrl];
+    if (!urls.every(allowedAudio)) return;
+    const bufs = [];
+    for (const u of urls) {
+      const b = await fetchVia(u, async (r) => { try { return await decodeBytes(await r.arrayBuffer()); } catch (e) { return null; } }, 40000);
+      if (!b || S !== session) return;
+      bufs.push(b);
+    }
+    let buf = bufs[0], offs = [0];
+    if (session.parts) {
+      const j = joinBuffers(bufs);
+      if (!j) return;
+      buf = j.buf;
+      offs = j.offs;
+    } else makePcmAudio(session, buf);
     const frame = Math.max(1, Math.round(buf.sampleRate * AUDIO_FRAME));
     const frames = Math.floor(buf.length / frame);
     const chans = [];
@@ -651,9 +839,21 @@ async function alignAudio(session) {
     const idx = [];
     session.units.forEach((u, i) => { if (u.seg) idx.push(i); });
     const segs = idx.map((i) => session.units[i].seg);
-    for (let k = 1; k < segs.length; k++) if (segs[k].start < segs[k - 1].start) return;   // out of order: leave alone
-    const fixed = alignSegments(db, segs, buf.duration);
+    let fixed;
+    if (segs.some((g) => g.est)) {
+      const groups = [], half = JOIN_GAP / 2;
+      segs.forEach((g, k) => {
+        const p = session.parts ? g.part | 0 : 0;
+        if (!groups.length || groups[groups.length - 1].p !== p) groups.push({ p, lo: p ? offs[p] - half : 0, hi: p + 1 < offs.length ? offs[p + 1] - half : buf.duration, w: [] });
+        groups[groups.length - 1].w.push(session.units[idx[k]].text.length + 8);
+      });
+      fixed = alignSegments(db, segs, buf.duration, (pauses, thr) => planEst(db, groups, thr, pauses));
+    } else {
+      for (let k = 1; k < segs.length; k++) if (segs[k].start < segs[k - 1].start) return;   // out of order: leave alone
+      fixed = alignSegments(db, segs, buf.duration);
+    }
     if (!fixed || S !== session) return;
+    if (session.parts) { makePcmAudio(session, buf); if (!session.pcm) return; }   // the times belong to the joined recording
     idx.forEach((i, k) => { session.units[i].seg = fixed[k]; });
   } catch (e) { /* keep the times from the story */ }
 }
@@ -843,8 +1043,8 @@ function cacheStory(story, audioUrl) {
     const list = story.audio && Array.isArray(story.audio.segments) ? story.audio.segments : [];
     const slim = {
       slug: slugOf(story), title: story.title, difficulty: story.difficulty,
-      audio: { url: audioUrl, segments: list.map((g) => (g ? { id: g.id, start: g.start, end: g.end } : null)) },
-      sentences: story.sentences.map((s) => ({ dutch: s && s.dutch, english: s && s.english })),
+      audio: { url: audioUrl, parts: story.audio && story.audio.parts, est: story.audio && story.audio.est, segments: list.map((g) => (g ? { id: g.id, start: g.start, end: g.end } : null)) },
+      sentences: story.sentences.map((s) => ({ dutch: s && s.dutch, english: s && s.english, part: s && s.part })),
     };
     const json = JSON.stringify(slim);
     if (json.length < 400000) localStorage.setItem(STORY_PREFIX + slim.slug, json);
@@ -1484,10 +1684,16 @@ function startStory(story, baseUrl, lesson) {
   const segFor = (i) => (idsMatch || list.length !== story.sentences.length)
     ? byId.get(i)
     : (good(list[i]) ? list[i] : undefined);
+  // Stories without times (est) get a guess for now; alignAudio replaces it. parts: one audio file per part.
+  const est = !!(story.audio && story.audio.est);
+  const pl = story.audio && Array.isArray(story.audio.parts) ? story.audio.parts.map((u) => safeAudioUrl(u, baseUrl)) : [];
+  const parts = pl.length && pl.every(Boolean) ? pl : null;
+  const okPart = (s) => !parts || (s && Number.isInteger(s.part) && s.part >= 0 && s.part < parts.length);
   const units = [];
   story.sentences.forEach((s, i) => {
     const text = String((s && s.dutch) || '').replace(/\s+/g, ' ').trim().normalize('NFC');
-    if (text) units.push({ text, en: String((s && s.english) || ''), seg: segFor(i) });
+    const guess = est && okPart(s) ? { start: 0, end: 0, est: true, part: parts ? s.part : undefined } : undefined;
+    if (text) units.push({ text, en: String((s && s.english) || ''), seg: segFor(i) || guess });
   });
   if (!units.length) { setMsg(NOT_STORY, true); return; }
 
@@ -1495,16 +1701,18 @@ function startStory(story, baseUrl, lesson) {
   if (S) { stopAudio(); releaseAudio(S); }
   let audio = null;
   const audioUrl = safeAudioUrl(story.audio && story.audio.url, baseUrl);
-  if (audioUrl && units.some((u) => u.seg)) {
+  const src = parts ? parts[0] : audioUrl;
+  if (src && units.some((u) => u.seg)) {
     audio = new Audio();
     audio.preload = 'auto';
     audio.addEventListener('error', () => {
       if (S && S.audio === audio) setMsg('The audio could not be loaded, so you can type along in silence.', true);
     });
-    audio.src = audioUrl;
+    audio.src = src;
+    if (parts) audio.dataset.src = src;
   }
   S = {
-    story, units, audio, audioUrl, pcm: null,
+    story, units, audio, audioUrl, parts, pcm: null,
     els: [], chars: [], trs: [], target: [], typed: [],
     cur: 0, gen: 0, tabs: 0, keys: 0, errors: 0, replays: 0, lock: false, finished: false, wantTop: null,
     level: storyLevel(story),
@@ -1587,7 +1795,8 @@ async function fetchVia(url, accept, ms) {
   return null;
 }
 
-// Only readdutch.nl story links; http is upgraded to https.
+// Story links from readdutch.nl, pollystop.com and speecher.org; http is upgraded to https.
+const siteHost = (h) => ['readdutch.nl', 'pollystop.com', 'speecher.org'].some((d) => h === d || h.endsWith('.' + d));
 function normalizeUrl(raw) {
   let v = String(raw || '').trim();
   if (!v || v.length > 2048 || /[\x00-\x20\x7f\\]/.test(v)) return '';
@@ -1597,31 +1806,31 @@ function normalizeUrl(raw) {
   const h = u.hostname.toLowerCase();
   if ((u.protocol !== 'https:' && u.protocol !== 'http:') || u.username || u.password) return '';
   if (u.port && u.port !== '80' && u.port !== '443') return '';
-  if (h !== 'readdutch.nl' && !h.endsWith('.readdutch.nl')) return '';
+  if (!siteHost(h)) return '';
   u.protocol = 'https:';
   u.port = '';
   return u.href;
 }
 
-// Story audio is fetched for the timing correction only from readdutch.nl or its public file storage.
+// Story audio is fetched for the timing correction only from the story sites or ReadDutch's public file storage.
 function allowedAudio(url) {
   try {
     const u = new URL(url), h = u.hostname.toLowerCase();
     if (u.origin === location.origin) return true;
     if (u.protocol !== 'https:' || u.username || u.password || (u.port && u.port !== '443')) return false;
-    return h === 'readdutch.nl' || h.endsWith('.readdutch.nl') || (h.endsWith('.supabase.co') && u.pathname.startsWith('/storage/v1/object/public/'));
+    return siteHost(h) || (h.endsWith('.supabase.co') && u.pathname.startsWith('/storage/v1/object/public/'));
   } catch (e) { return false; }
 }
 
 async function loadFromUrl(raw) {
   const mine = ++loadSeq;
   const url = normalizeUrl(raw);
-  if (!url) { setMsg('Only readdutch.nl story links are supported.', true); return; }
+  if (!url) { setMsg('Only readdutch.nl, pollystop.com and speecher.org story links are supported.', true); return; }
   setMsg('Loading story...');
   const story = await fetchVia(url, async (r) => { try { return parseStory(await r.text()); } catch (e) { return null; } }, 15000);
   if (mine !== loadSeq) return;
   if (!story) {
-    setMsg("Could not load that link from here: readdutch.nl does not allow other sites to read it, and no relay answered. Save the story page from your browser (Ctrl+S, 'Webpage, HTML only') and open that file with the link under the box.", true);
+    setMsg("Could not load that link from here: that site does not allow other sites to read it, and no relay answered. Save the story page from your browser (Ctrl+S, 'Webpage, HTML only') and open that file with the link under the box.", true);
     return;
   }
   startStory(story, url);
@@ -1706,7 +1915,7 @@ function renderLessons() {
     lessonsEl.chips.appendChild(b);
   });
   const missing = lessons.filter((l) => !l.mp3).length;
-  lessonsEl.note.textContent = missing ? missing + (missing === 1 ? ' lesson has' : ' lessons have') + ' no mp3 next to it and will stream its audio from ReadDutch.' : '';
+  lessonsEl.note.textContent = missing ? missing + (missing === 1 ? ' lesson has' : ' lessons have') + ' no mp3 next to it and will stream its audio from the original site.' : '';
   const lib = readLib(), vals = Object.values(lib);
   const shown = lessons.filter((l) => !lessonLevel || l.level === lessonLevel)
     .sort((a, b) => levelCmp(a.level, b.level) || a.name.localeCompare(b.name, undefined, { numeric: true }));
@@ -1748,7 +1957,10 @@ async function openLesson(l) {
   if (html === null) { setMsg('Could not load ' + l.html + '.', true); return; }
   let story;
   try { story = parseStory(html); } catch (e) { setMsg(e.message, true); return; }
-  if (l.mp3) story.audio = Object.assign({}, story.audio, { url: lessonUrl(l.mp3) });   // the mp3 beside the lesson wins
+  if (l.mp3) {   // the mp3 beside the lesson wins
+    story.audio = Object.assign({}, story.audio, { url: lessonUrl(l.mp3) });
+    delete story.audio.parts;
+  }
   startStory(story, lessonUrl(l.html), l.html);
   window.scrollTo({ top: 0 });
 }
