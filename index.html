@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <meta name="description" content="Dutch dictation practice for ReadDutch, PollyStop and Speecher stories. Runs in your browser; statistics and progress stay on your device.">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-98wvNBAu2ZKqGbYGVdZxu4PTI/IqOpiC/g+f4ND06Xs='; style-src 'sha256-o1M7Idol2RVH/wWbutROoh2OBWMk5L4aolnas2Ijqeo='; connect-src 'self' https:; media-src 'self' https: blob:; img-src data:; base-uri 'none'; form-action 'none'">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23ff8a3d'/%3E%3Ctext x='16' y='23' font-size='15' text-anchor='middle' font-family='Georgia,serif' font-weight='700' fill='%231b0f05'%3ELT%3C/text%3E%3C/svg%3E">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-YACTC6Xt44OPqehNU5UNEk9NKceW4DGmSNfU4T7DfEY='; style-src 'sha256-o1M7Idol2RVH/wWbutROoh2OBWMk5L4aolnas2Ijqeo='; connect-src 'self' https:; media-src 'self' https: blob:; img-src data:; base-uri 'none'; form-action 'none'">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23ff8a3d'/%3E%3Ctext x='16' y='23' font-size='20' text-anchor='middle' font-family='Georgia,serif' font-weight='700' fill='%231b0f05'%3ELT%3C/text%3E%3C/svg%3E">
 <title>LangType</title>
 <style>
 :root {
@@ -482,8 +482,8 @@ function parsePollyStop(html) {
 function parseSpeecher(html) {
   if (html.indexOf('RD_FIRST') < 0) return null;
   const get = (name) => {
-    const k = html.indexOf('window.' + name + ' = ');
-    const s = k < 0 ? -1 : html.indexOf('{', k);
+    const m = new RegExp('window\\.' + name + '\\s*=\\s*').exec(html);
+    const s = m ? html.indexOf('{', m.index + m[0].length) : -1;
     const json = s < 0 ? null : extractObject(html, s);
     try { return json ? JSON.parse(json) : null; } catch (e) { return null; }
   };
@@ -1800,21 +1800,41 @@ RELAYS.push(
 let bestRelay = -1;
 
 // accept(response) returns the result, or null if this route gave nothing usable (then the next one is tried).
-async function fetchVia(url, accept, ms) {
-  const routes = [-2];   // -2 = direct
-  if (bestRelay >= 0) routes.push(bestRelay);
-  RELAYS.forEach((_, i) => { if (i !== bestRelay) routes.push(i); });
-  for (const via of routes) {
-    const ac = new AbortController(), timer = setTimeout(() => ac.abort(), ms);
+// A web page (page = true) is asked for through every relay at once, and the first answer that holds a story wins.
+// Besides the relays there are a page reader (r.jina.ai, which loads the page in a browser and returns its HTML),
+// allorigins' JSON route and thingproxy. Audio is tried one route at a time.
+const PAGE_ROUTES = [
+  (u) => ({ url: 'https://r.jina.ai/' + u, headers: { 'X-Return-Format': 'html' }, ms: 35000 }),
+  (u) => ({ url: 'https://api.allorigins.win/get?url=' + encodeURIComponent(u), json: true }),
+  (u) => ({ url: 'https://thingproxy.freeboard.io/fetch/' + u }),
+];
+async function fetchVia(url, accept, ms, page) {
+  const tryRoute = async (route, via) => {
+    const ac = new AbortController(), timer = setTimeout(() => ac.abort(), route.ms || ms);
     try {
-      const r = await fetch(via === -2 ? url : RELAYS[via](url), { signal: ac.signal, credentials: 'omit', referrerPolicy: 'no-referrer' });
-      if (r.ok) {
-        const out = await accept(r);
-        if (out != null) { if (via >= 0) bestRelay = via; return out; }
-      }
-    } catch (e) { /* blocked, offline or too slow: next route */ } finally { clearTimeout(timer); }
+      const r = await fetch(route.url, { signal: ac.signal, credentials: 'omit', referrerPolicy: 'no-referrer', headers: route.headers });
+      if (!r.ok) return null;
+      const res = route.json ? { ok: true, text: async () => String((await r.json()).contents || '') } : r;
+      const out = await accept(res);
+      if (out != null && via >= 0) bestRelay = via;
+      return out;
+    } catch (e) { return null; } finally { clearTimeout(timer); }   // blocked, offline or too slow
+  };
+  const direct = await tryRoute({ url }, -2);
+  if (direct != null) return direct;
+  const routes = [];
+  if (bestRelay >= 0) routes.push([{ url: RELAYS[bestRelay](url) }, bestRelay]);
+  RELAYS.forEach((f, i) => { if (i !== bestRelay) routes.push([{ url: f(url) }, i]); });
+  if (page) PAGE_ROUTES.forEach((f) => routes.push([f(url), -3]));
+  if (!page) {
+    for (const [r, v] of routes) { const out = await tryRoute(r, v); if (out != null) return out; }
+    return null;
   }
-  return null;
+  return new Promise((done) => {
+    let left = routes.length;
+    if (!left) done(null);
+    routes.forEach(([r, v]) => tryRoute(r, v).then((out) => { if (out != null) done(out); else if (--left === 0) done(null); }));
+  });
 }
 
 // Story links from readdutch.nl, pollystop.com and speecher.org; http is upgraded to https.
@@ -1849,9 +1869,11 @@ async function loadFromUrl(raw) {
   const url = normalizeUrl(raw);
   if (!url) { setMsg('Only readdutch.nl, pollystop.com and speecher.org story links are supported.', true); return; }
   setMsg('Loading story...');
-  const story = await fetchVia(url, async (r) => { try { return parseStory(await r.text()); } catch (e) { return null; } }, 15000);
+  let got = false;
+  const story = await fetchVia(url, async (r) => { try { return parseStory(await r.text()); } catch (e) { got = true; return null; } }, 15000, true);
   if (mine !== loadSeq) return;
   if (!story) {
+    if (got) { setMsg("A page came back but no story was found in it (the site or the relay may be blocking the request). Save the story page from your browser (Ctrl+S, 'Webpage, HTML only') and open that file with the link under the box.", true); return; }
     setMsg("Could not load that link from here: that site does not allow other sites to read it, and no relay answered. Save the story page from your browser (Ctrl+S, 'Webpage, HTML only') and open that file with the link under the box.", true);
     return;
   }
