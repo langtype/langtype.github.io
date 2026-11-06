@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <meta name="description" content="Dutch dictation practice for ReadDutch, PollyStop and Speecher stories. Runs in your browser; statistics and progress stay on your device.">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-rhwYfcuWroxS1hWq1qcb0x23f+diyvkSOaGfXHsDi1g='; style-src 'sha256-o1M7Idol2RVH/wWbutROoh2OBWMk5L4aolnas2Ijqeo='; connect-src 'self' https:; media-src 'self' https: blob:; img-src data:; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-E5FYNNdlQ0S62la9mcZ7GQADjgvXuMio6rNdZS/m66M='; style-src 'sha256-o1M7Idol2RVH/wWbutROoh2OBWMk5L4aolnas2Ijqeo='; connect-src 'self' https:; media-src 'self' https: blob:; img-src data:; base-uri 'none'; form-action 'none'">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23ff8a3d'/%3E%3Ctext x='16' y='23' font-size='20' text-anchor='middle' font-family='Georgia,serif' font-weight='700' fill='%231b0f05'%3ED%3C/text%3E%3C/svg%3E">
 <title>Dictee</title>
 <style>
@@ -506,6 +506,8 @@ function parseSpeecher(html) {
     });
     if (parts.length) audio = { parts, est: true };
   } else {
+    const head = clean(r.title);
+    if (head) sentences.push({ dutch: /[.!?:]$/.test(head) ? head : head + ':', english: '' });   // the title is read out first
     splitSentences(r.body).forEach((d) => sentences.push({ dutch: d, english: '' }));
     if (Array.isArray(idx) && idx.length === 1 && idx[0] > 0) audio = { url: clip(0), est: true };
   }
@@ -743,37 +745,11 @@ function adoptPcm() {
   S.audio = S.pcm.audio;
 }
 
-// Sentences without times: between two neighbours the cut goes to a real pause. The pauses are chosen all at once
-// (cheapest way through, in order) so that they are long and each sentence comes out about as long as its text
-// suggests. ps: [middle, length] of each pause in time order; est: where each cut would be by text length alone.
-function pickCuts(ps, est) {
-  const M = est.length, P = ps.length;
-  if (!M) return [];
-  if (P < M) return est;
-  const cost = (j, p) => 0.4 * Math.abs(ps[p][0] - est[j]) - 2 * Math.min(ps[p][1], 0.9);
-  const dp = [], from = [];
-  for (let j = 0; j < M; j++) {
-    const row = new Float64Array(P).fill(Infinity), fr = new Int32Array(P).fill(-1);
-    let best = Infinity, bi = -1;
-    for (let p = 0; p < P; p++) {
-      if (j === 0) row[p] = cost(0, p);
-      else {
-        if (p > 0 && dp[j - 1][p - 1] < best) { best = dp[j - 1][p - 1]; bi = p - 1; }
-        if (bi >= 0) { row[p] = best + cost(j, p); fr[p] = bi; }
-      }
-    }
-    dp.push(row);
-    from.push(fr);
-  }
-  let p = 0;
-  for (let q = 1; q < P; q++) if (dp[M - 1][q] < dp[M - 1][p]) p = q;
-  if (!isFinite(dp[M - 1][p])) return est;
-  const out = new Array(M);
-  for (let j = M - 1; j >= 0; j--) { out[j] = ps[p][0]; p = from[j][p]; }
-  return out;
-}
-
-// groups: one per audio file, in order: { lo, hi: where its stretch of the recording runs, w: text length of each sentence }.
+// Sentences without times: the cuts go to real pauses. The commas and sentence ends of the text are matched, in
+// order, with the pauses in the recording (a comma may have no pause, a pause may be a breath). A pause is judged by
+// how much speech lies before it compared with how much text lies before the punctuation, so the pauses'
+// own lengths cannot throw the guess off, and by being long when it is a sentence end.
+// groups: one per audio file: { lo, hi: its stretch of the recording, t: text of each sentence }.
 // Returns the cut before every sentence and after the last one.
 function planEst(db, groups, thr, pauses) {
   const F = AUDIO_FRAME, cuts = [];
@@ -781,11 +757,57 @@ function planEst(db, groups, thr, pauses) {
     let a = Math.max(0, Math.floor(g.lo / F)), z = Math.min(db.length, Math.ceil(g.hi / F)) - 1;
     while (a < z && db[a] < thr) a++;
     while (z > a && db[z] < thr) z--;
-    const s = a * F, e = (z + 1) * F, tot = g.w.reduce((x, y) => x + y, 0);
-    let acc = 0;
-    const est = g.w.slice(0, -1).map((w) => s + (e - s) * (acc += w) / tot);
-    const ps = pauses.filter(([x, y]) => x > s && y < e && y - x >= 0.1).map(([x, y]) => [(x + y) / 2, y - x]);
-    cuts.push(g.lo, ...pickCuts(ps, est));
+    const s = a * F, e = (z + 1) * F;
+    let gone = 0;
+    const ps = pauses.filter(([x, y]) => x > s && y < e && y - x >= 0.08).map(([x, y]) => {
+      const p = { m: (x + y) / 2, len: y - x, sp: x - s - gone };
+      gone += y - x;
+      return p;
+    });
+    const slots = [];
+    let chars = 0;
+    g.t.forEach((t, i) => {
+      for (let k = 0; k < t.length; k++) {
+        if (/[\p{L}\p{N}]/u.test(t[k])) chars++;
+        else if (k < t.length - 1 && /[,;:\u2013\u2014]/.test(t[k])) slots.push({ c: chars, b: false });
+      }
+      if (i < g.t.length - 1) slots.push({ c: chars, b: true });
+    });
+    const speech = e - s - gone, exp = slots.map((sl) => sl.c / Math.max(1, chars) * speech);
+    const S = slots.length, P = ps.length;
+    const skip = (i) => (slots[i].b ? 4 : 0.4), extra = (j) => 0.1 + 0.8 * Math.max(0, ps[j].len - 0.25);
+    const match = (i, j) => {
+      const d = Math.abs(ps[j].sp - exp[i]), l = ps[j].len;
+      return 0.3 * d + (slots[i].b ? -3 * Math.min(l, 0.8) : 3 * Math.max(0, l - 0.35));
+    };
+    const f = [], bk = [];
+    for (let i = 0; i <= S; i++) { f.push(new Float64Array(P + 1)); bk.push(new Uint8Array(P + 1)); }
+    for (let j = 1; j <= P; j++) { f[0][j] = f[0][j - 1] + extra(j - 1); bk[0][j] = 2; }
+    for (let i = 1; i <= S; i++) {
+      f[i][0] = f[i - 1][0] + skip(i - 1); bk[i][0] = 1;
+      for (let j = 1; j <= P; j++) {
+        let best = f[i - 1][j - 1] + match(i - 1, j - 1), how = 0;
+        const sk = f[i - 1][j] + skip(i - 1), ex = f[i][j - 1] + extra(j - 1);
+        if (sk < best) { best = sk; how = 1; }
+        if (ex < best) { best = ex; how = 2; }
+        f[i][j] = best; bk[i][j] = how;
+      }
+    }
+    const at = new Array(S).fill(-1);
+    for (let i = S, j = P; i > 0 || j > 0;) {
+      const how = bk[i][j];
+      if (i > 0 && j > 0 && how === 0) { at[i - 1] = j - 1; i--; j--; } else if (i > 0 && (how === 1 || j === 0)) i--; else j--;
+    }
+    let prev = g.lo;
+    cuts.push(g.lo);
+    slots.forEach((sl, i) => {
+      if (!sl.b) return;
+      let c;
+      if (at[i] >= 0) c = ps[at[i]].m;
+      else { c = s + exp[i]; for (const p of ps) if (p.sp <= exp[i]) c += p.len; }   // no pause found: by the text alone
+      prev = Math.max(prev + 0.05, c);
+      cuts.push(prev);
+    });
   }
   cuts.push(groups[groups.length - 1].hi);
   return cuts;
@@ -844,8 +866,8 @@ async function alignAudio(session) {
       const groups = [], half = JOIN_GAP / 2;
       segs.forEach((g, k) => {
         const p = session.parts ? g.part | 0 : 0;
-        if (!groups.length || groups[groups.length - 1].p !== p) groups.push({ p, lo: p ? offs[p] - half : 0, hi: p + 1 < offs.length ? offs[p + 1] - half : buf.duration, w: [] });
-        groups[groups.length - 1].w.push(session.units[idx[k]].text.length + 8);
+        if (!groups.length || groups[groups.length - 1].p !== p) groups.push({ p, lo: p ? offs[p] - half : 0, hi: p + 1 < offs.length ? offs[p + 1] - half : buf.duration, t: [] });
+        groups[groups.length - 1].t.push(session.units[idx[k]].text);
       });
       fixed = alignSegments(db, segs, buf.duration, (pauses, thr) => planEst(db, groups, thr, pauses));
     } else {
